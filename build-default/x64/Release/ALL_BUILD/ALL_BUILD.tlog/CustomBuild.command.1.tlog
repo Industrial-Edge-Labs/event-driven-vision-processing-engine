@@ -1,0 +1,10 @@
+^C:\USERS\SMARTECHLATAM GERALD\DESKTOP\GIT4\EVENT-DRIVEN-VISION-PROCESSING-ENGINE\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" "-SC:/Users/SMARTECHLATAM GERALD/Desktop/git4/event-driven-vision-processing-engine" "-BC:/Users/SMARTECHLATAM GERALD/Desktop/git4/event-driven-vision-processing-engine/build-default" --check-stamp-file "C:/Users/SMARTECHLATAM GERALD/Desktop/git4/event-driven-vision-processing-engine/build-default/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

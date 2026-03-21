@@ -1,8 +1,7 @@
 #pragma once
 
-#include <cstdint>
 #include <atomic>
-#include <vector>
+#include <cstdint>
 
 namespace vision {
 
@@ -45,10 +44,10 @@ private:
     std::atomic<bool> event_triggered_{false};
     std::atomic<uint32_t> next_object_id_{1};
     uint64_t last_frame_id_{0};
-    uint64_t synthetic_frame_cursor_{0};
+    uint64_t fallback_frame_cursor_{0};
     uint64_t last_event_tick_{0};
     float last_event_score_{0.0f};
-    bool using_synthetic_ingest_{true};
+    bool using_fallback_ingest_{true};
     float detection_threshold_{0.85f}; // Example tensor activation probability minimum
 };
 

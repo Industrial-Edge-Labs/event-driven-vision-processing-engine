@@ -20,6 +20,7 @@ namespace {
 
 constexpr const char* kDecisionEndpoint = "tcp://127.0.0.1:5555";
 constexpr const char* kVideoIngressEndpoint = "tcp://127.0.0.1:6000";
+constexpr uint64_t kFallbackIngressStride = 4;
 
 #pragma pack(push, 1)
 struct InferencePayload {
@@ -42,6 +43,7 @@ struct UpstreamFrameEnvelope {
 #pragma pack(pop)
 
 static_assert(sizeof(InferencePayload) == 32, "InferencePayload wire format changed unexpectedly.");
+static_assert(sizeof(UpstreamFrameEnvelope) == 28, "UpstreamFrameEnvelope wire format changed unexpectedly.");
 
 uint64_t now_ns() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -51,6 +53,10 @@ uint64_t now_ns() {
 
 float clamp_unit(float value) {
     return std::clamp(value, 0.0f, 0.999f);
+}
+
+bool is_expected_frame_shape(const UpstreamFrameEnvelope& envelope, uint32_t width, uint32_t height, uint32_t channels) {
+    return envelope.width == width && envelope.height == height && envelope.channels == channels;
 }
 
 } // namespace
@@ -65,7 +71,7 @@ ZeroCopyIngest::ZeroCopyIngest(uint32_t width_px, uint32_t height_px, uint32_t c
 #if VISION_ENGINE_USE_ZMQ
     zmq_context_ = zmq_ctx_new();
     if (!zmq_context_) {
-        std::cerr << "[Vision::NVMM] Failed to initialize ZeroMQ context. Falling back to synthetic ingest only.\n";
+        std::cerr << "[Vision::NVMM] Failed to initialize ZeroMQ context. Falling back to deterministic local ingest.\n";
         return;
     }
 
@@ -73,7 +79,7 @@ ZeroCopyIngest::ZeroCopyIngest(uint32_t width_px, uint32_t height_px, uint32_t c
     zmq_subscriber_ = zmq_socket(zmq_context_, ZMQ_SUB);
 
     if (!zmq_publisher_ || !zmq_subscriber_) {
-        std::cerr << "[Vision::NVMM] Failed to allocate ZeroMQ sockets. Synthetic ingest remains available.\n";
+        std::cerr << "[Vision::NVMM] Failed to allocate ZeroMQ sockets. Local fallback ingest remains available.\n";
         return;
     }
 
@@ -96,7 +102,7 @@ ZeroCopyIngest::ZeroCopyIngest(uint32_t width_px, uint32_t height_px, uint32_t c
 
     if (zmq_connect(zmq_subscriber_, kVideoIngressEndpoint) != 0) {
         std::cerr << "[Vision::NVMM] Failed to connect upstream stream orchestrator on "
-                  << kVideoIngressEndpoint << ". Using synthetic frame ingress.\n";
+                  << kVideoIngressEndpoint << ". Using deterministic local fallback ingress.\n";
         zmq_close(zmq_subscriber_);
         zmq_subscriber_ = nullptr;
     }
@@ -120,10 +126,10 @@ ZeroCopyIngest::~ZeroCopyIngest() {
 
 bool ZeroCopyIngest::allocateMemory() {
     last_frame_id_ = 0;
-    synthetic_frame_cursor_ = 0;
+    fallback_frame_cursor_ = 0;
     last_event_tick_ = 0;
     last_event_score_ = 0.0f;
-    using_synthetic_ingest_ = true;
+    using_fallback_ingest_ = true;
 
     // In actual production:
     // cudaMallocHost(&p_host_pinned, size_bytes);
@@ -141,18 +147,24 @@ bool ZeroCopyIngest::pollNetworkInterface() {
         UpstreamFrameEnvelope envelope{};
         const int received = zmq_recv(zmq_subscriber_, &envelope, sizeof(envelope), ZMQ_DONTWAIT);
         if (received == sizeof(envelope)) {
+            if (!is_expected_frame_shape(envelope, w_, h_, c_)) {
+                std::cerr << "[Vision::NVMM] Dropped upstream frame envelope with unexpected geometry: "
+                          << envelope.width << "x" << envelope.height << "x" << envelope.channels << "\n";
+                return false;
+            }
+
             last_frame_id_ = envelope.frame_id;
-            using_synthetic_ingest_ = false;
+            using_fallback_ingest_ = false;
             return true;
         }
     }
 #endif
 
-    // Synthetic ingress keeps the engine debuggable even without #3 online.
-    ++synthetic_frame_cursor_;
-    if (synthetic_frame_cursor_ % 4 == 0) {
-        last_frame_id_ = synthetic_frame_cursor_;
-        using_synthetic_ingest_ = true;
+    // Deterministic fallback ingress keeps the engine runnable even when #3 is offline.
+    ++fallback_frame_cursor_;
+    if (fallback_frame_cursor_ % kFallbackIngressStride == 0) {
+        last_frame_id_ = fallback_frame_cursor_;
+        using_fallback_ingest_ = true;
         return true;
     }
 
@@ -162,7 +174,7 @@ bool ZeroCopyIngest::pollNetworkInterface() {
 void ZeroCopyIngest::processTemporalDerivative(uint64_t clock_tick) {
     const double phase = static_cast<double>((clock_tick + last_frame_id_) % 720) * 0.021;
     const float temporal_energy = static_cast<float>(0.45 + 0.35 * std::sin(phase));
-    const float transport_bias = using_synthetic_ingest_ ? 0.02f : 0.08f;
+    const float transport_bias = using_fallback_ingest_ ? 0.02f : 0.08f;
     const float edge_density = static_cast<float>(0.06 + 0.06 * std::cos(phase * 0.5));
 
     last_event_tick_ = clock_tick;
@@ -190,7 +202,7 @@ void ZeroCopyIngest::dispatchInferenceEvent(uint64_t clock_tick) {
               << " frame=" << last_frame_id_
               << " object=" << payload.object_id
               << " confidence=" << payload.confidence
-              << (using_synthetic_ingest_ ? " [synthetic_ingress]" : " [upstream_ingress]")
+              << (using_fallback_ingest_ ? " [fallback_ingress]" : " [upstream_ingress]")
               << "\n";
 
 #if VISION_ENGINE_USE_ZMQ

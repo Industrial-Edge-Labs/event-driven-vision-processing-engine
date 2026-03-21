@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(VISION_ENGINE_ENABLE_ZEROMQ "Enable ZeroMQ ingress/egress integration." ON)
+option(VISION_ENGINE_ENABLE_ZEROMQ "Enable ZeroMQ ingress/egress integration." OFF)
 option(VISION_ENGINE_ENABLE_CUDA "Enable optional CUDA runtime linkage." OFF)
 option(VISION_ENGINE_ENABLE_OPENCV "Enable optional OpenCV linkage." OFF)
 
