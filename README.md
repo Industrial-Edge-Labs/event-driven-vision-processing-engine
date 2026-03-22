@@ -21,6 +21,14 @@ cmake -S . -B build
 cmake --build build
 ```
 
+### Local tests
+
+```bash
+cmake -S . -B build -DVISION_ENGINE_ENABLE_TESTS=ON
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
+
 ### ZeroMQ-enabled build
 
 ```bash
@@ -65,4 +73,5 @@ This keeps the module aligned with the decision engine without introducing JSON 
 
 - If ZeroMQ is unavailable, the engine keeps generating and logging events locally.
 - The current temporal derivative is still a deterministic surrogate, but it now varies over time and reflects whether ingress is fallback-driven or upstream-fed.
+- The internal code is now split between contract definitions, event synthesis, and the ingest transport layer so behavior can be tested without the live network path.
 - The external documentation for this node lives in [docs-Industrial-Edge-Labs/event-driven-vision-processing-engine](https://github.com/Industrial-Edge-Labs/docs-Industrial-Edge-Labs/tree/main/event-driven-vision-processing-engine).

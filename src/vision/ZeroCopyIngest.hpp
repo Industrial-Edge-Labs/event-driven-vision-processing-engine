@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cstdint>
 
+#include "Contracts.hpp"
+
 namespace vision {
 
 /**
@@ -26,6 +28,9 @@ public:
     void processTemporalDerivative(uint64_t clock_tick);
     bool hasThresholdEvent() const;
     void dispatchInferenceEvent(uint64_t clock_tick);
+    float lastEventScore() const;
+    bool usingFallbackIngress() const;
+    uint64_t lastFrameId() const;
 
 private:
     void* zmq_context_;

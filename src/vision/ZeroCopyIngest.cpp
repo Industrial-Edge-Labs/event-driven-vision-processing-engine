@@ -1,10 +1,11 @@
 #include "ZeroCopyIngest.hpp"
 
 #include <algorithm>
-#include <chrono>
-#include <cmath>
 #include <cstring>
 #include <iostream>
+
+#include "Contracts.hpp"
+#include "EventSynthesizer.hpp"
 
 #ifndef VISION_ENGINE_USE_ZMQ
 #define VISION_ENGINE_USE_ZMQ 1
@@ -21,43 +22,6 @@ namespace {
 constexpr const char* kDecisionEndpoint = "tcp://127.0.0.1:5555";
 constexpr const char* kVideoIngressEndpoint = "tcp://127.0.0.1:6000";
 constexpr uint64_t kFallbackIngressStride = 4;
-
-#pragma pack(push, 1)
-struct InferencePayload {
-    uint64_t timestamp;
-    uint32_t object_id;
-    float confidence;
-    float x;
-    float y;
-    float dx;
-    float dy;
-};
-
-struct UpstreamFrameEnvelope {
-    uint64_t timestamp;
-    uint64_t frame_id;
-    uint32_t width;
-    uint32_t height;
-    uint32_t channels;
-};
-#pragma pack(pop)
-
-static_assert(sizeof(InferencePayload) == 32, "InferencePayload wire format changed unexpectedly.");
-static_assert(sizeof(UpstreamFrameEnvelope) == 28, "UpstreamFrameEnvelope wire format changed unexpectedly.");
-
-uint64_t now_ns() {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count());
-}
-
-float clamp_unit(float value) {
-    return std::clamp(value, 0.0f, 0.999f);
-}
-
-bool is_expected_frame_shape(const UpstreamFrameEnvelope& envelope, uint32_t width, uint32_t height, uint32_t channels) {
-    return envelope.width == width && envelope.height == height && envelope.channels == channels;
-}
 
 } // namespace
 
@@ -172,13 +136,8 @@ bool ZeroCopyIngest::pollNetworkInterface() {
 }
 
 void ZeroCopyIngest::processTemporalDerivative(uint64_t clock_tick) {
-    const double phase = static_cast<double>((clock_tick + last_frame_id_) % 720) * 0.021;
-    const float temporal_energy = static_cast<float>(0.45 + 0.35 * std::sin(phase));
-    const float transport_bias = using_fallback_ingest_ ? 0.02f : 0.08f;
-    const float edge_density = static_cast<float>(0.06 + 0.06 * std::cos(phase * 0.5));
-
     last_event_tick_ = clock_tick;
-    last_event_score_ = clamp_unit(temporal_energy + transport_bias + edge_density);
+    last_event_score_ = compute_temporal_score(clock_tick, last_frame_id_, using_fallback_ingest_);
     event_triggered_.store(last_event_score_ >= detection_threshold_, std::memory_order_release);
 }
 
@@ -187,16 +146,13 @@ bool ZeroCopyIngest::hasThresholdEvent() const {
 }
 
 void ZeroCopyIngest::dispatchInferenceEvent(uint64_t clock_tick) {
-    InferencePayload payload{};
-    const double phase = static_cast<double>((clock_tick + last_frame_id_) % 360) * 0.017453292519943295;
-
-    payload.timestamp = now_ns();
-    payload.object_id = next_object_id_.fetch_add(1, std::memory_order_relaxed);
-    payload.confidence = clamp_unit(0.55f + (last_event_score_ * 0.35f));
-    payload.x = 960.0f + static_cast<float>(420.0 * std::sin(phase));
-    payload.y = 540.0f + static_cast<float>(180.0 * std::cos(phase * 0.5));
-    payload.dx = 4.0f + static_cast<float>(18.0 * std::fabs(std::cos(phase * 0.75)));
-    payload.dy = -1.5f + static_cast<float>(3.0 * std::sin(phase * 0.25));
+    const auto snapshot = synthesize_event(
+        clock_tick,
+        last_frame_id_,
+        using_fallback_ingest_,
+        next_object_id_.fetch_add(1, std::memory_order_relaxed)
+    );
+    const auto& payload = snapshot.payload;
 
     std::cout << "[Vision::NVMM] Event tick=" << last_event_tick_
               << " frame=" << last_frame_id_
@@ -224,6 +180,18 @@ void ZeroCopyIngest::dispatchInferenceEvent(uint64_t clock_tick) {
 #endif
 
     std::cout << "[Vision::NVMM] ZeroMQ disabled or unavailable. Event retained in local debug stream.\n";
+}
+
+float ZeroCopyIngest::lastEventScore() const {
+    return last_event_score_;
+}
+
+bool ZeroCopyIngest::usingFallbackIngress() const {
+    return using_fallback_ingest_;
+}
+
+uint64_t ZeroCopyIngest::lastFrameId() const {
+    return last_frame_id_;
 }
 
 } // namespace vision
